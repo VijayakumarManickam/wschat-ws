@@ -1,0 +1,165 @@
+#!/usr/bin/env node
+
+/**
+ * Module dependencies.
+ */
+
+var app = require('../app');
+var debug = require('debug')('wschat-ws:server');
+var http = require('http');
+var WebSocket = require('ws');
+/**
+ * Adopted from https://gist.github.com/martinsik/2031681
+ */
+var history = [];
+var clients = [];
+
+function htmlEntities(str) {
+  return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+var colors = [ 'red', 'green', 'blue', 'magenta', 'purple', 'plum', 'orange' ];
+colors.sort(function(a,b) { return Math.random() > 0.5; } );
+
+
+/**
+ * Get port from environment and store in Express.
+ */
+
+var port = normalizePort(process.env.PORT || '3000');
+app.set('port', port);
+
+/**
+ * Create HTTP server.
+ */
+
+var server = http.createServer(app);
+
+/**
+ * Setup WS service
+ */
+
+var wss = new WebSocket.Server({ server });
+
+wss.broadcast = function broadcast(data) {
+  wss.clients.forEach(function each(client) {
+    if(client.readyState === WebSocket.OPEN) {
+      client.send(data);
+    }
+  });
+};
+
+wss.on('connection', function connection(ws, req) {
+  console.log('connection initiated from %s, %s', req.socket.address().address, req.url);
+
+  var index = clients.push(ws) - 1;
+  var userName = false;
+  var userColor = false;
+
+  console.log(new Date() + ' connection accepted');
+
+  if (history.length > 0) {
+    ws.send(JSON.stringify({type: 'history', data: history}));
+  }
+
+  ws.on('message', function incoming(message) {
+    if(message !== null && message.trim() !== '') {
+      if (userName === false) {
+        userName = htmlEntities(message);
+        userColor = colors.shift();
+        ws.send(JSON.stringify({type: 'color', data: userColor}));
+        console.log(new Date() + ' user is know as '+ userName + ' with '+ userColor+' color.');
+      } else {
+        var obj = {
+          time: (new Date()).getTime(),
+          text: htmlEntities(message),
+          author: userName,
+          color: userColor
+        };
+        history.push(obj);
+        history = history.slice(-100);
+        var json = JSON.stringify({type: 'message', data: obj});
+        for(var i=0; i<clients.length; i++) {
+          clients[i].send(json);
+        }
+      }
+    }
+  });
+
+  ws.on('close', function(code, reason) {
+    if(userName !== false && userColor !== false) {
+      console.log(new Date() +' Peer '+ code + "-" + reason);
+      clients.splice(index, 1);
+      colors.push(userColor);
+    }
+  });
+});
+
+/**
+ * Listen on provided port, on all network interfaces.
+ */
+
+server.listen(port);
+server.on('error', onError);
+server.on('listening', onListening);
+
+/**
+ * Normalize a port into a number, string, or false.
+ */
+
+function normalizePort(val) {
+  var port = parseInt(val, 10);
+
+  if (isNaN(port)) {
+    // named pipe
+    return val;
+  }
+
+  if (port >= 0) {
+    // port number
+    return port;
+  }
+
+  return false;
+}
+
+/**
+ * Event listener for HTTP server "error" event.
+ */
+
+function onError(error) {
+  if (error.syscall !== 'listen') {
+    throw error;
+  }
+
+  var bind = typeof port === 'string'
+    ? 'Pipe ' + port
+    : 'Port ' + port;
+
+  // handle specific listen errors with friendly messages
+  switch (error.code) {
+    case 'EACCES':
+      console.error(bind + ' requires elevated privileges');
+      process.exit(1);
+      break;
+    case 'EADDRINUSE':
+      console.error(bind + ' is already in use');
+      process.exit(1);
+      break;
+    default:
+      throw error;
+  }
+}
+
+/**
+ * Event listener for HTTP server "listening" event.
+ */
+
+function onListening() {
+  var addr = server.address();
+  var bind = typeof addr === 'string'
+    ? 'pipe ' + addr
+    : 'port ' + addr.port;
+  debug('Listening on ' + bind);
+}
